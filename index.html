@@ -10,6 +10,7 @@
             position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); 
             z-index: 1000; padding: 15px 35px; background: #2196F3; color: white; 
             border: none; border-radius: 50px; font-weight: bold; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
         }
     </style>
 </head>
@@ -18,16 +19,26 @@
     <button id="btn-start">INICIAR EXPERIENCIA</button>
 
     <script>
-        // SHADER CHROMA KEY PARA ELIMINAR EL VERDE
+        // SHADER CHROMA KEY MEJORADO CON SOPORTE DE TRANSPARENCIA REAL
         AFRAME.registerComponent('chromakey', {
-            schema: { color: { type: 'color', default: '#12e310' } },
+            schema: { 
+                color: { type: 'color', default: '#12e310' },
+                threshold: { type: 'float', default: 0.45 } // Umbral de detección del verde
+            },
             init: function () {
                 const videoElement = document.querySelector('#arVideo');
                 const texture = new THREE.VideoTexture(videoElement);
-                this.el.getObject3D('mesh').material = new THREE.ShaderMaterial({
+                texture.minFilter = THREE.LinearFilter;
+                texture.magFilter = THREE.LinearFilter;
+                
+                // Forzamos el formato RGBA para soportar transparencias en la textura
+                texture.format = THREE.RGBAFormat;
+
+                this.material = new THREE.ShaderMaterial({
                     uniforms: {
                         u_texture: { value: texture },
-                        u_color: { value: new THREE.Color(this.data.color) }
+                        u_color: { value: new THREE.Color(this.data.color) },
+                        u_threshold: { value: this.data.threshold }
                     },
                     vertexShader: `
                         varying vec2 vUv;
@@ -40,15 +51,31 @@
                         varying vec2 vUv;
                         uniform sampler2D u_texture;
                         uniform vec3 u_color;
+                        uniform float u_threshold;
                         void main() {
                             vec4 texColor = texture2D(u_texture, vUv);
+                            // Calculamos la distancia entre el color del píxel y el verde objetivo
                             float dist = distance(texColor.rgb, u_color);
-                            if (dist < 0.5) { discard; }
+                            
+                            if (dist < u_threshold) { 
+                                discard; // Elimina por completo el píxel verde
+                            }
                             gl_FragColor = texColor;
                         }
                     `,
-                    transparent: true
+                    transparent: true, // CLAVE: Permite que el shader renderice transparencias
+                    depthWrite: false  // Evita problemas de orden de renderizado (glitch de parpadeo)
                 });
+
+                // Esperamos a que la malla del plano esté lista y aplicamos el material personalizado
+                this.el.addEventListener('object3dset', () => {
+                    const mesh = this.el.getObject3D('mesh');
+                    if (mesh) { mesh.material = this.material; }
+                });
+
+                if (this.el.getObject3D('mesh')) {
+                    this.el.getObject3D('mesh').material = this.material;
+                }
             }
         });
     </script>
@@ -61,13 +88,13 @@
         device-orientation-permission-ui="enabled: false">
         
         <a-assets>
-            <video id="arVideo" src="video.mp4" loop="true" crossorigin="anonymous" playsinline></video>
+            <video id="arVideo" src="video.mp4" loop="true" crossorigin="anonymous" playsinline webkit-playsinline></video>
         </a-assets>
 
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
         <a-entity id="paint-target" mindar-image-target="targetIndex: 0">
-            <a-plane width="1" height="1" position="0 0 0" chromakey="color: #12e310"></a-plane>
+            <a-plane width="1.78" height="1" position="0 0 0" material="transparent: true; opacity: 1" chromakey="color: #12e310; threshold: 0.45"></a-plane>
         </a-entity>
     </a-scene>
 
@@ -77,10 +104,16 @@
         const sceneEl = document.querySelector('a-scene');
 
         btn.addEventListener('click', () => {
-            // Iniciamos el sistema con parámetros de resolución manual para buscar más nitidez
-            sceneEl.systems["mindar-image-system"].start();
-            video.play();
-            btn.style.display = 'none';
+            // "Desbloqueo" previo obligatorio para navegadores móviles (iOS/Safari)
+            video.play().then(() => {
+                video.pause(); 
+                sceneEl.systems["mindar-image-system"].start();
+                btn.style.display = 'none';
+            }).catch(err => {
+                console.log("Error de autoplay mitigado:", err);
+                sceneEl.systems["mindar-image-system"].start();
+                btn.style.display = 'none';
+            });
         });
 
         const targetEl = document.getElementById('paint-target');
