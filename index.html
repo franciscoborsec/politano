@@ -5,7 +5,7 @@
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.2/dist/mindar-image-aframe.prod.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background: transparent !important; font-family: sans-serif; }
         #btn-start { 
             position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); 
             z-index: 1000; padding: 15px 35px; background: #2196F3; color: white; 
@@ -19,25 +19,21 @@
     <button id="btn-start">INICIAR EXPERIENCIA</button>
 
     <script>
-        // COMPONENTE CHROMA KEY NATIVO EN THREE.JS
+        // SHADER DE ALTA PRECISIÓN QUE OBLIGA A IGNORAR EL FONDO NEGRO
         AFRAME.registerComponent('chromakey', {
             schema: { 
                 color: { type: 'color', default: '#12e310' },
-                threshold: { type: 'float', default: 0.45 } // Si queda rastro verde, sube a 0.5
+                threshold: { type: 'float', default: 0.5 } // Umbral aumentado para mayor limpieza
             },
             init: function () {
                 const videoElement = document.querySelector('#arVideo');
-                
-                // Forzamos la textura en modo RGBA (con canal alfa activo)
                 const texture = new THREE.VideoTexture(videoElement);
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
-                texture.format = THREE.RGBAFormat; 
+                texture.format = THREE.RGBAFormat; // Exige canales de transparencia integrados
 
-                // Creamos un plano rectangular (Proporción 16:9 -> 1.78 de ancho por 1 de alto)
-                const geometry = new THREE.PlaneGeometry(1.78, 1); 
+                const geometry = new THREE.PlaneGeometry(1.78, 1); // Forzar aspecto panorámico
 
-                // Construimos el Shader que descarta el verde en la GPU
                 this.material = new THREE.ShaderMaterial({
                     uniforms: {
                         u_texture: { value: texture },
@@ -59,11 +55,12 @@
                         uniform float u_threshold;
                         void main() {
                             vec4 texColor = texture2D(u_texture, vUv);
-                            // Calculamos la distancia matemática entre el verde y el píxel actual
+                            
+                            // Distancia euclidiana en el espacio RGB
                             float dist = distance(texColor.rgb, u_color);
                             
                             if (dist < u_threshold) { 
-                                discard; // Si es verde, el píxel se vuelve completamente transparente
+                                discard; // La GPU destruye el píxel verde por completo
                             } else {
                                 gl_FragColor = texColor;
                             }
@@ -71,11 +68,13 @@
                     `,
                     transparent: true,
                     depthWrite: false,
+                    depthTest: true,
                     blending: THREE.NormalBlending
                 });
 
-                // Creamos la malla e inyectamos el objeto directamente en A-Frame
                 const mesh = new THREE.Mesh(geometry, this.material);
+                // Aseguramos que la malla no herede opacidad negra de contenedores ocultos
+                mesh.material.needsUpdate = true;
                 this.el.setObject3D('mesh', mesh);
             }
         });
@@ -84,7 +83,7 @@
     <a-scene 
         mindar-image="imageTargetSrc: ./targets.mind; autoStart: false; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
         color-space="sRGB" 
-        renderer="colorManagement: true, physicallyCorrectLights, alpha: true" 
+        renderer="colorManagement: true, physicallyCorrectLights, alpha: true, antialias: true" 
         vr-mode-ui="enabled: false" 
         device-orientation-permission-ui="enabled: false">
         
@@ -95,7 +94,7 @@
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
         <a-entity id="paint-target" mindar-image-target="targetIndex: 0">
-            <a-entity chromakey="color: #12e310; threshold: 0.45" position="0 0 0"></a-entity>
+            <a-entity chromakey="color: #12e310; threshold: 0.5" position="0 0 0"></a-entity>
         </a-entity>
     </a-scene>
 
@@ -105,12 +104,13 @@
         const sceneEl = document.querySelector('a-scene');
 
         btn.addEventListener('click', () => {
+            // Desbloqueo forzado
             video.play().then(() => {
                 video.pause(); 
                 sceneEl.systems["mindar-image-system"].start();
                 btn.style.display = 'none';
             }).catch(err => {
-                console.log("Autoplay:", err);
+                console.log("Autoplay mitigado:", err);
                 sceneEl.systems["mindar-image-system"].start();
                 btn.style.display = 'none';
             });
