@@ -19,21 +19,25 @@
     <button id="btn-start">INICIAR EXPERIENCIA</button>
 
     <script>
-        // SHADER CHROMA KEY MEJORADO CON SOPORTE DE TRANSPARENCIA REAL
+        // COMPONENTE CHROMA KEY NATIVO EN THREE.JS
         AFRAME.registerComponent('chromakey', {
             schema: { 
                 color: { type: 'color', default: '#12e310' },
-                threshold: { type: 'float', default: 0.45 } // Umbral de detección del verde
+                threshold: { type: 'float', default: 0.45 } // Si queda rastro verde, sube a 0.5
             },
             init: function () {
                 const videoElement = document.querySelector('#arVideo');
+                
+                // Forzamos la textura en modo RGBA (con canal alfa activo)
                 const texture = new THREE.VideoTexture(videoElement);
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
-                
-                // Forzamos el formato RGBA para soportar transparencias en la textura
-                texture.format = THREE.RGBAFormat;
+                texture.format = THREE.RGBAFormat; 
 
+                // Creamos un plano rectangular (Proporción 16:9 -> 1.78 de ancho por 1 de alto)
+                const geometry = new THREE.PlaneGeometry(1.78, 1); 
+
+                // Construimos el Shader que descarta el verde en la GPU
                 this.material = new THREE.ShaderMaterial({
                     uniforms: {
                         u_texture: { value: texture },
@@ -48,34 +52,31 @@
                         }
                     `,
                     fragmentShader: `
+                        precision highp float;
                         varying vec2 vUv;
                         uniform sampler2D u_texture;
                         uniform vec3 u_color;
                         uniform float u_threshold;
                         void main() {
                             vec4 texColor = texture2D(u_texture, vUv);
-                            // Calculamos la distancia entre el color del píxel y el verde objetivo
+                            // Calculamos la distancia matemática entre el verde y el píxel actual
                             float dist = distance(texColor.rgb, u_color);
                             
                             if (dist < u_threshold) { 
-                                discard; // Elimina por completo el píxel verde
+                                discard; // Si es verde, el píxel se vuelve completamente transparente
+                            } else {
+                                gl_FragColor = texColor;
                             }
-                            gl_FragColor = texColor;
                         }
                     `,
-                    transparent: true, // CLAVE: Permite que el shader renderice transparencias
-                    depthWrite: false  // Evita problemas de orden de renderizado (glitch de parpadeo)
+                    transparent: true,
+                    depthWrite: false,
+                    blending: THREE.NormalBlending
                 });
 
-                // Esperamos a que la malla del plano esté lista y aplicamos el material personalizado
-                this.el.addEventListener('object3dset', () => {
-                    const mesh = this.el.getObject3D('mesh');
-                    if (mesh) { mesh.material = this.material; }
-                });
-
-                if (this.el.getObject3D('mesh')) {
-                    this.el.getObject3D('mesh').material = this.material;
-                }
+                // Creamos la malla e inyectamos el objeto directamente en A-Frame
+                const mesh = new THREE.Mesh(geometry, this.material);
+                this.el.setObject3D('mesh', mesh);
             }
         });
     </script>
@@ -83,7 +84,7 @@
     <a-scene 
         mindar-image="imageTargetSrc: ./targets.mind; autoStart: false; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
         color-space="sRGB" 
-        renderer="colorManagement: true, physicallyCorrectLights" 
+        renderer="colorManagement: true, physicallyCorrectLights, alpha: true" 
         vr-mode-ui="enabled: false" 
         device-orientation-permission-ui="enabled: false">
         
@@ -94,7 +95,7 @@
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
         <a-entity id="paint-target" mindar-image-target="targetIndex: 0">
-            <a-plane width="1.78" height="1" position="0 0 0" material="transparent: true; opacity: 1" chromakey="color: #12e310; threshold: 0.45"></a-plane>
+            <a-entity chromakey="color: #12e310; threshold: 0.45" position="0 0 0"></a-entity>
         </a-entity>
     </a-scene>
 
@@ -104,13 +105,12 @@
         const sceneEl = document.querySelector('a-scene');
 
         btn.addEventListener('click', () => {
-            // "Desbloqueo" previo obligatorio para navegadores móviles (iOS/Safari)
             video.play().then(() => {
                 video.pause(); 
                 sceneEl.systems["mindar-image-system"].start();
                 btn.style.display = 'none';
             }).catch(err => {
-                console.log("Error de autoplay mitigado:", err);
+                console.log("Autoplay:", err);
                 sceneEl.systems["mindar-image-system"].start();
                 btn.style.display = 'none';
             });
